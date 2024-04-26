@@ -1,0 +1,3 @@
+# TinyFunctional
+
+A tiny functional programming library for modern C++
