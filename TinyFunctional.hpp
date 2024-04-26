@@ -5,40 +5,6 @@
 
 namespace f {
 
-/* Collection interfaces;
- * 
- * Used to provide a functional-like interface for std collections.
- */
-/*
-template <typename Arr, typename V> [[nodiscard]]
-constexpr inline auto push_back(const Arr& arr, V& v) { return arr.push_back(v); }
-
-template <typename Arr> [[nodiscard]]
-constexpr inline auto begin(Arr& arr) { return arr.begin(); }
-
-template <typename Arr> [[nodiscard]]
-constexpr inline auto end(Arr& arr) { return arr.end(); }
-
-template <typename Arr> [[nodiscard]]
-constexpr inline auto rbegin(Arr& arr) { return arr.rbegin(); }
-
-template <typename Arr> [[nodiscard]]
-constexpr inline auto rend(Arr& arr) { return arr.rend(); }
-
-template <typename Arr> [[nodiscard]]
-constexpr inline auto cbegin(const Arr& arr) { return arr.begin(); }
-
-template <typename Arr> [[nodiscard]]
-constexpr inline auto cend(const Arr& arr) { return arr.end(); }
-
-template <typename Arr> [[nodiscard]]
-constexpr auto crbegin(const Arr& arr) { return arr.rbegin(); }
-
-template <typename Arr> [[nodiscard]]
-constexpr auto crend(const Arr& arr) { return arr.rend(); }
-*/
-
-
 /* F(A...) -> B
  *
  * 'Lazy' models the evalutation from a function given arguments to a value;
@@ -61,9 +27,8 @@ public:
                                std::forward<As>(args)...);}), evaluated(false) {};
 
     ~Lazy(void) {
-        if (!evaluated)
-            return;
-        get().~value_type();
+        if (evaluated)
+            get().~value_type();
     }
 
     constexpr bool has_value(void) const {
@@ -269,29 +234,35 @@ auto fmap(F&& f, C const& in) -> LazyTransformation<C, F> {
  * Now, it is possible to use the partially-applied functions with their
  * pre-determined initial values.
  */
-namespace currydetail {
-// perfect_capture_t is taken from http://stackoverflow.com/a/31410880/2622629
-template <class T>
-using perfect_capture_t =
-    std::conditional_t<std::is_lvalue_reference<T>::value,
-                       std::reference_wrapper<std::remove_reference_t<T>>, T>;
-#define CAPTURE(V) currydetail::perfect_capture_t<decltype(V)>{std::forward(V)}
+#ifdef PERFECT_CAPTURE_BREAKS_GCC
+#   define FORWARD(VARIABLE) std::forward<decltype(VARIABLE)>(VARIABLE)
+#   define CAPTURE_FORWARD(VARIABLE) detail::perfect_capture_t<decltype(VARIABLE)>{ FORWARD(VARIABLE) }
+#else
+#   define FORWARD(VARIABLE) VARIABLE
+#   define CAPTURE_FORWARD(VARIABLE) VARIABLE
+#endif
 
-template<class, class=std::void_t<>>
-struct needs_unapply : std::true_type{};
+namespace detail {
+    // perfect_capture_t is taken from http://stackoverflow.com/a/31410880/2622629
+    template <class T> using 
+    perfect_capture_t =
+        std::conditional_t<std::is_lvalue_reference<T>::value,
+                           std::reference_wrapper<std::remove_reference_t<T>>, T>;
 
-template<class T>
-struct needs_unapply<T, std::void_t<decltype(std::declval<T>()())>> : std::false_type {};
+    template< class, class = std::void_t<> >
+    struct needs_unapply : std::true_type { };
+
+    template< class T >
+    struct needs_unapply<T, std::void_t<decltype(std::declval<T>()())>> : std::false_type { };
 }
 
 template <typename F>
 decltype(auto) curry(F&& f) {
-    if constexpr (currydetail::needs_unapply<decltype(f)>::value) {
-        return [f = CAPTURE(f)](auto &&x) {
-          return curry(
-              [ x = CAPTURE(x), f = CAPTURE(f) ](auto &&...xs)
-              -> decltype(f(std::forward(x),std::forward(xs)...)) {
-                return f(std::forward(x), std::forward(xs)...);
+    if constexpr (detail::needs_unapply<decltype(f)>::value) {
+        return [f=CAPTURE_FORWARD(f)](auto&& x) {
+            return curry(
+              [x=CAPTURE_FORWARD(x), f=CAPTURE_FORWARD(f)](auto&&...xs) -> decltype(f(FORWARD(x),FORWARD(xs)...)) {
+                return f(FORWARD(x),FORWARD(xs)...);
               }
             );
         };
