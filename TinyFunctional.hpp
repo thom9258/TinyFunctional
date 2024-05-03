@@ -5,6 +5,24 @@
 
 namespace f {
 
+namespace detail {
+
+template<typename T, typename... Ts>
+struct largest_type {
+  static const size_t size =
+    sizeof(T) > largest_type<Ts...>::size ? sizeof(T) : largest_type<Ts...>::size;
+};
+
+}
+
+/* Base tag type 
+ */
+struct throwable {
+};
+
+struct bad_access : throwable {
+};
+
 /* F(A...) -> B
  *
  * 'Lazy' models the evalutation from a function given arguments to a value;
@@ -43,8 +61,8 @@ public:
 
     constexpr reference_type get(void) {
         if (!evaluated) {
-            evaluated = true;
             new(static_cast<void*>(&b)) value_type(f());
+            evaluated = true;
         }
         return *reinterpret_cast<value_type*>(static_cast<void*>(&b));
     }
@@ -57,6 +75,59 @@ private:
     std::aligned_storage_t<sizeof(value_type), alignof(value_type)> b;
     bool evaluated;
 };
+
+/* 'OneOf' models the discriminated union of 'type1' OR 'type2'. 
+ *
+ * OneOf is to std::variant what std::pair is to std::tuple.
+ */
+template <typename A, typename B>
+class OneOf {
+public:
+    using value1_type = A;
+    using value1_reference = value1_type&;
+    using value2_type = B;
+    using value2_reference = value2_type&;
+
+    constexpr explicit OneOf(value1_type &&a) : m_is_value1(true) {
+        new (static_cast<void *>(&m_storage)) value1_type(a);
+    };
+    constexpr explicit OneOf(value2_type &&b) : m_is_value1(false) {
+        new (static_cast<void *>(&m_storage)) value2_type(b);
+    };
+
+    ~OneOf(void) {
+        if (m_is_value1)
+            get_value1().~value1_type();
+        else
+            get_value2().~value2_type();
+    }
+
+    constexpr bool is_value1(void) const {
+        return m_is_value1;
+    } 
+    constexpr bool is_value2(void) const {
+        return !m_is_value1;
+    } 
+
+    constexpr value1_reference get_value1(void) {
+        if (!m_is_value1)
+            throw bad_access();
+        return *reinterpret_cast<value1_type*>(static_cast<void*>(&m_storage));
+    }
+    constexpr value2_reference get_value2(void) {
+        if (m_is_value1)
+            throw bad_access();
+        return *reinterpret_cast<value2_type*>(static_cast<void*>(&m_storage));
+    }
+
+private:
+  std::aligned_storage_t <
+      std::max(sizeof(A), sizeof(B)),
+      std::max(alignof(A), alignof(B))> m_storage;
+    bool m_is_value1;
+};
+
+
 
 /* F([A]) -> [B]
  *
@@ -116,21 +187,27 @@ constexpr inline T strip(Lazy<T> opt) {
  * compose models a joined transformation of input given transformers
  * joined together.
  */
-
-template <class F>
-auto compose(F&& arg) {
-    return std::forward(arg);
+/*
+template <typename F>
+auto compose(F f) {
+    return [=] (auto x) { return f(x); };
 }
+
+template <typename F, typename... Fs>
+auto compose(F&& f, Fs&&... fs) {
+    //return [=] (auto x) { return f(compose(fs...)(x)); };
+    return [=] (auto x) { return std::invoke(f, (compose(std::forward(fs)...))(x)); };
+}
+*/
 
 template <class F, class... Fs>
-auto compose(F&& arg, Fs&& ...args)
+auto compose(F&& f, Fs&& ...fs)
 {
-    return [ fun = std::forward(arg), ... functions = std::forward(args) ]
+    return [ f = std::forward(f), ... fs = std::forward(fs) ]
         <class... Xs>(Xs&& ...xs) mutable {
-        return compose(std::forward(functions)...)(std::invoke(std::forward(fun), std::forward(xs)...));
+        return compose(std::forward(fs)...)(std::invoke(std::forward(f), std::forward(xs)...));
     };
 }
-
 
 /* for_each collection traversal.
  *
@@ -269,5 +346,115 @@ decltype(auto) curry(F&& f) {
     }
     else return f();
 }
+
+}
+
+
+namespace fp {
+// Fluent C++ Blog, Jonathan Boccara
+//   Pipes: How plumbing can make your cpp code more expressive
+//   https://github.com/joboccara/pipes
+
+// David Sankel Functional Design Explained
+// https://github.com/graninas/cpp_functional_programming
+// https://geo-ant.github.io/blog/2020/optional-pipe-syntax-part-3/
+// https://pfultz2.com/blog/2014/09/05/pipable-functions/
+
+/*
+template <typename T>
+using Sink = std::function<void(const T&)>;
+
+template <typename T>
+using Source = std::function<void(Sink<T>)>;
+
+template <typename T>
+void connect(Source<T> so, Sink<T> si) {
+    so(si);
+}
+
+template <typename A, typename B>
+using Transform = std::function<void(Sink<B>, A)>;
+
+template <typename A, typename B>
+void apply_to_sink(Transform<A, B> tf, Sink<A> si) {
+    tf(si);
+}
+
+template <typename A, typename B>
+void apply_to_source(Transform<A, B> tf, Source<A> so) {
+    tf(so);
+}
+template <typename A, typename B>
+void operator>>(Transform<A, B> tf, Source<A> so) {
+    apply_to_source(tf, so);
+}
+
+template <typename A, typename B>
+void operator>>(Transform<A, B> tf, Sink<A> si) {
+    apply_to_sink(tf, si);
+}
+
+template <typename T>
+void operator>>(Source<T> so, Sink<T> si) {
+    connect(so, si);
+}
+
+struct pipe_base {};
+
+template <typename F>
+class TransformPipe : public pipe_base {
+public:
+    explicit TransformPipe(F f) : f(f) {};
+
+    template <typename... V, typename P>
+    void onRecieve(V&&... v, P&& next) {
+        send(std::invoke(f, std::forward(v)...), next);
+    }
+
+private:
+    F f;
+};
+
+template <typename F>
+TransformPipe<F> transform(F f) {
+    return TransformPipe<F>(f);
+}
+
+template <class F>
+struct PipeClosure : F {
+    template <class... Xs>
+    PipeClosure(Xs&&... xs) : F(std::forward(xs)...) {}
+};
+
+template <typename T, typename F>
+decltype(auto) operator>>=(T&& c, const PipeClosure<F> p) {
+    return std::invoke(p, std::forward(p));
+}
+
+template <class F>
+auto MakePipeClosure(F&& f) {
+    return PipeClosure<F>(std::move(f));
+}
+
+
+template <class F>
+struct Pipalbe {
+    template <class... Xs>
+    auto operator()(Xs&&... xs) {
+        return MakePipeClosure([=](auto x) -> decltype(auto) {
+            return F()(x, xs...);});
+    }
+};
+
+
+template <typename C, typename P>
+C operator>>(C&& c, P&& p) {
+    using std::begin;
+    using std::end;
+    std::copy(
+        std::make_move_iterator(begin(c), std::make_move_iterator(end(c))),
+        p);
+}
+*/
 
 }
