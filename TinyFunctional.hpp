@@ -3,9 +3,29 @@
 #include <functional>
 #include <optional>
 
+#ifdef PERFECT_CAPTURE_BREAKS_GCC
+#   define FORWARD(VARIABLE) std::forward<decltype(VARIABLE)>(VARIABLE)
+#   define CAPTURE_FORWARD(VARIABLE) detail::perfect_capture_t<decltype(VARIABLE)>{ FORWARD(VARIABLE) }
+#else
+#   define FORWARD(VARIABLE) VARIABLE
+#   define CAPTURE_FORWARD(VARIABLE) VARIABLE
+#endif
+
 namespace f {
 
 namespace detail {
+
+// perfect_capture_t is taken from http://stackoverflow.com/a/31410880/2622629
+template <class T> using 
+perfect_capture_t =
+    std::conditional_t<std::is_lvalue_reference<T>::value,
+                       std::reference_wrapper<std::remove_reference_t<T>>, T>;
+
+template< class, class = std::void_t<> >
+struct needs_unapply : std::true_type { };
+
+template< class T >
+struct needs_unapply<T, std::void_t<decltype(std::declval<T>()())>> : std::false_type { };
 
 template<typename T, typename... Ts>
 struct largest_type {
@@ -15,13 +35,15 @@ struct largest_type {
 
 }
 
-/* Base tag type 
+/* Basic tag type
  */
-struct throwable {
-};
+struct error {};
 
-struct bad_access : throwable {
-};
+struct bad_access : error {};
+
+struct nullvalue_type {};
+constexpr nullvalue_type nullvalue;
+
 
 /* F(A...) -> B
  *
@@ -36,7 +58,7 @@ template <typename T>
 class Lazy {
 public:
     using value_type = T;
-    using reference_type = value_type&;
+    using value_reference = value_type&;
     
     template <typename F, typename... As>
     constexpr explicit Lazy(F &&f, As &&...args)
@@ -59,7 +81,7 @@ public:
         return evaluated;
     } 
 
-    constexpr reference_type get(void) {
+    constexpr value_reference get(void) {
         if (!evaluated) {
             new(static_cast<void*>(&b)) value_type(f());
             evaluated = true;
@@ -67,8 +89,8 @@ public:
         return *reinterpret_cast<value_type*>(static_cast<void*>(&b));
     }
 
-    constexpr reference_type operator*(void)  { return get(); }
-    constexpr reference_type operator->(void) { return get(); }
+    constexpr value_reference operator*(void)  { return get(); }
+    constexpr value_reference operator->(void) { return get(); }
 
 private:
     std::function<value_type(void)> f;
@@ -76,9 +98,252 @@ private:
     bool evaluated;
 };
 
+
 /* 'OneOf' models the discriminated union of 'type1' OR 'type2'. 
  *
  * OneOf is to std::variant what std::pair is to std::tuple.
+ * https://ojdip.net/2013/10/implementing-a-variant-type-in-cpp/
+ */
+/*
+template <typename T, class E = void>
+struct InlineStorage {
+    constexpr void set(T&& t) {
+        m_filled = true;
+        new (static_cast<void *>(&m_storage)) T(t);
+    } 
+    constexpr T& get(void) const {
+        //return *reinterpret_cast<T*>(static_cast<void*>(&m_storage));
+        return *reinterpret_cast<T>(&m_storage);
+    } 
+    ~InlineStorage(void) {
+        if (m_filled)
+            get().~T();
+    }
+    bool filled(void) {
+        return m_filled;
+    }
+private:
+    std::aligned_storage_t<sizeof(T), alignof(T)> m_storage;
+    bool m_filled;
+};
+
+template <typename T>
+struct InlineStorage<T, std::enable_if_t<std::is_trivially_destructible_v<T>>> {
+    constexpr void set(T&& t) {
+        m_filled = true;
+        new (static_cast<void *>(&m_storage)) T(t);
+    } 
+    constexpr T& get(void) const {
+        //return *reinterpret_cast<T*>(static_cast<void*>(&m_storage));
+        return *reinterpret_cast<T>(&m_storage);
+    } 
+    ~InlineStorage(void) {
+        if (m_filled)
+            get().~T();
+    }
+    bool filled(void) {
+        return m_filled;
+    }
+private:
+    std::aligned_storage_t<sizeof(T), alignof(T)> m_storage;
+    bool m_filled;
+};
+*/
+
+/* Partial Specialization to eliminate sometimes trivial destructors
+   http://www.club.cc.cmu.edu/~ajo/disseminate/2017-02-15-Optional-From-Scratch.pdf
+ */
+
+/*
+template <typename T>
+struct InlineStorage<T> 
+    : InlineStorage<T, std::enable_if_t<std::is_trivially_destructible_v<T>>> {
+
+};
+
+template <typename T>
+struct InlineStorage<T, std::enable_if_t<std::is_trivially_destructible_v<T>>> {
+    constexpr void set(T&& t) {
+        m_filled = true;
+        new (static_cast<void *>(&m_storage)) T(t);
+    } 
+    constexpr T& get(void) const {
+        return *reinterpret_cast<T*>(static_cast<void*>(&m_storage));
+    } 
+    ~InlineStorage(void) = default;
+private:
+    std::aligned_storage_t<sizeof(T), alignof(T)> m_storage;
+    bool m_filled;
+};
+*/
+
+    /*
+template <typename T>
+class ISOptional {
+public:
+    using value_type = T;
+    using value_reference = value_type&;
+    using rvalue_reference = value_type&&;
+    using transformer = std::function<ISOptional(ISOptional)>;
+
+    constexpr explicit ISOptional(rvalue_reference v) {
+        m_storage.set(std::move(v));
+    };
+
+    constexpr explicit ISOptional(void) {};
+
+    constexpr bool has_value(void) {
+        return m_storage.filled();
+    } 
+
+    constexpr value_reference get_value(void) {
+        if (!has_value())
+            throw bad_access();
+        return m_storage.get();
+    }
+
+    constexpr explicit operator bool(void) {
+        return has_value();
+    }
+    constexpr value_reference operator*(void)  { return get_value(); }
+    constexpr value_reference operator->(void) { return get_value(); }
+    constexpr value_reference get_value_or(rvalue_reference other) {
+        if (!has_value())
+            return other;
+        return m_storage.get();
+    }
+    constexpr ISOptional& when(transformer f) {
+        
+        if (m_storage.filled())
+            raw() = f(raw());
+        return this;
+    } 
+
+    constexpr ISOptional& unless(transformer f) {
+        if (!m_storage.filled())
+            raw() = f(raw());
+        return this;
+    } 
+private:
+    InlineStorage<T> m_storage;
+};
+    */
+template <class T, class E = void>
+struct OptionalStorage {
+    union {
+        nullvalue_type nothing;
+        T value;
+    };
+    bool has_value = false;
+    constexpr OptionalStorage(void);
+    constexpr OptionalStorage(T &&v) : value(v), has_value(true) {};
+    ~OptionalStorage(void) { if (has_value) value.~T(); }
+};
+
+template <class T>
+struct OptionalStorage<T, std::enable_if_t<std::is_trivially_destructible_v<T>>> {
+    union {
+        nullvalue_type nothing;
+        T value;
+    };
+    bool has_value = false;
+    constexpr OptionalStorage(void) {};
+    constexpr OptionalStorage(T &&v) : value(v), has_value(true) {};
+    ~OptionalStorage(void) = default;
+};
+
+template <class T>
+class Optional {
+public:
+    using value_type = T;
+    using value_reference = T&;
+    using rvalue_reference = T&&;
+
+    explicit constexpr Optional(void) noexcept {};
+    explicit constexpr Optional(nullvalue_type) noexcept {};
+    //template <class U>
+    //explicit constexpr Optional(U&& v) : m_storage(std::forward<T>(v)) {}
+
+    explicit constexpr Optional(T&& v) : m_storage(std::forward<T>(v)) {}
+
+    constexpr Optional& operator=(T&& v) {
+        reset();
+        m_storage = std::forward<T>(v);
+        return *this;
+    }
+
+    ~Optional(void) = default;
+
+    constexpr void reset(void) const {
+        m_storage.~OptionalStorage();
+    }
+
+    constexpr bool has_value(void) const {
+        return m_storage.has_value;
+    }
+    constexpr explicit operator bool(void) const {
+        return has_value();
+    }
+
+    constexpr value_reference get_value(void) {
+        if (!has_value())
+            throw bad_access();
+        return m_storage.value;
+    }
+    constexpr value_reference operator*(void)  { return get_value(); }
+    constexpr value_reference operator->(void) { return get_value(); }
+
+private:
+    OptionalStorage<value_type> m_storage;
+};
+
+
+template <typename T, class E = void>
+class NotOptional {
+public:
+    using value_type = T;
+    using value_reference = value_type&;
+
+    constexpr explicit NotOptional(value_type &&v) : m_has_value(true) {
+        new (static_cast<void *>(&m_storage)) value_type(v);
+    };
+
+    constexpr explicit NotOptional(void) : m_has_value(false) {
+    };
+
+    ~NotOptional(void) {
+        if (m_has_value)
+            get_value().~value_type();
+    }
+
+    constexpr bool has_value(void) const {
+        return m_has_value;
+    } 
+
+    constexpr value_reference get_value(void) {
+        if (!has_value())
+            throw bad_access();
+        return m_storage.value;
+    }
+
+    constexpr explicit operator bool(void) const {
+        return has_value();
+    }
+    constexpr value_reference operator*(void)  { return get_value(); }
+    constexpr value_reference operator->(void) { return get_value(); }
+
+private:
+    union {
+        nullvalue_type nullvalue;
+        value_type value;
+    } m_storage;
+    bool m_has_value;
+};
+
+/* 'OneOf' models the discriminated union of 'type1' OR 'type2'. 
+ *
+ * OneOf is to std::variant what std::pair is to std::tuple.
+ * https://ojdip.net/2013/10/implementing-a-variant-type-in-cpp/
  */
 template <typename A, typename B>
 class OneOf {
@@ -126,7 +391,6 @@ private:
       std::max(alignof(A), alignof(B))> m_storage;
     bool m_is_value1;
 };
-
 
 
 /* F([A]) -> [B]
@@ -180,7 +444,6 @@ constexpr inline T strip(Lazy<T> opt) {
     if (opt) return *opt;
     return {};
 }
-
 
 /* F(x) G(y) -> F(G(Y))
  *
@@ -311,28 +574,6 @@ auto fmap(F&& f, C const& in) -> LazyTransformation<C, F> {
  * Now, it is possible to use the partially-applied functions with their
  * pre-determined initial values.
  */
-#ifdef PERFECT_CAPTURE_BREAKS_GCC
-#   define FORWARD(VARIABLE) std::forward<decltype(VARIABLE)>(VARIABLE)
-#   define CAPTURE_FORWARD(VARIABLE) detail::perfect_capture_t<decltype(VARIABLE)>{ FORWARD(VARIABLE) }
-#else
-#   define FORWARD(VARIABLE) VARIABLE
-#   define CAPTURE_FORWARD(VARIABLE) VARIABLE
-#endif
-
-namespace detail {
-    // perfect_capture_t is taken from http://stackoverflow.com/a/31410880/2622629
-    template <class T> using 
-    perfect_capture_t =
-        std::conditional_t<std::is_lvalue_reference<T>::value,
-                           std::reference_wrapper<std::remove_reference_t<T>>, T>;
-
-    template< class, class = std::void_t<> >
-    struct needs_unapply : std::true_type { };
-
-    template< class T >
-    struct needs_unapply<T, std::void_t<decltype(std::declval<T>()())>> : std::false_type { };
-}
-
 template <typename F>
 decltype(auto) curry(F&& f) {
     if constexpr (detail::needs_unapply<decltype(f)>::value) {
