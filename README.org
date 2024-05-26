@@ -1,3 +1,15 @@
-# TinyFunctional
+#+TITLE: TinyFunctional
+#+AUTHOR: Thomas Alexgaard
+#+STARTUP: showeverything
+
+# Introduction
 
 A tiny functional programming library for modern C++
+
+
+# Refrences
+
+## Using std::aligned_storage
+
+[[https://stackoverflow.com/questions/50271304/what-is-the-purpose-of-stdaligned-storage][The Purpose Of Aligned Storage]]
+[[https://corecppil.github.io/Meetups/2019-03-28_Distributed_TLV_JLM/C++Programming-for-the-Heap-Deprived.pdf][Heap-Deprived Programming]]
