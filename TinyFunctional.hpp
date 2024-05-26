@@ -41,8 +41,19 @@ struct error {};
 
 struct bad_access : error {};
 
-struct nullvalue_type {};
-constexpr nullvalue_type nullvalue;
+/* nullvalue_type is a tag to have compile-time invalid types.
+ * nullvalue_type defines an explicit constructor to ensure that automatic
+ * template deduction does not interpret {} as a nullvalue_type when used
+ * for construction.
+ */
+struct nullvalue_type {
+    char null = 0;
+    explicit constexpr nullvalue_type(int n) : null(n) {};
+};
+/* we define a typed invalid value called nullvalue, this serves the same
+ * purpose as nullptr.
+ */
+constexpr nullvalue_type nullvalue{0};
 
 
 /* F(A...) -> B
@@ -228,116 +239,211 @@ private:
     InlineStorage<T> m_storage;
 };
     */
+
+
+/* Storage of an templated type.
+ *
+ * This template is instansiated for non-trivial types and explicitly
+ * destructs opbjects.
+ */
 template <class T, class E = void>
-struct OptionalStorage {
-    union {
-        nullvalue_type nothing;
-        T value;
-    };
+struct Storage {
+    ~Storage(void) { reset(); }
+    union { nullvalue_type null; T value; };
     bool has_value = false;
-    constexpr OptionalStorage(void);
-    constexpr OptionalStorage(T &&v) : value(v), has_value(true) {};
-    ~OptionalStorage(void) { if (has_value) value.~T(); }
+    constexpr Storage(void) noexcept {};
+    constexpr Storage(T &&v) noexcept : value(v), has_value(true) {};
+    constexpr void reset(void) {
+        if (has_value) value.T::~T();
+        has_value = false;
+    }
 };
 
+/* Storage of an templated type.
+ *
+ * This template is instansiated for trivial types and does not handle
+ * destruction. 
+ */
 template <class T>
-struct OptionalStorage<T, std::enable_if_t<std::is_trivially_destructible_v<T>>> {
-    union {
-        nullvalue_type nothing;
-        T value;
-    };
+struct Storage<T, std::enable_if_t<std::is_trivially_destructible_v<T>>> {
+    ~Storage(void) = default;
+    union { nullvalue_type null; T value; };
     bool has_value = false;
-    constexpr OptionalStorage(void) {};
-    constexpr OptionalStorage(T &&v) : value(v), has_value(true) {};
-    ~OptionalStorage(void) = default;
+    constexpr Storage(void) noexcept {};
+    constexpr Storage(T &&v) noexcept : value(v), has_value(true) {};
+    constexpr void reset(void) {
+        if (has_value) value.T::~T();
+        has_value = false;
+    }
 };
 
-template <class T>
+
+template <typename T>
 class Optional {
+    Storage<T> m_storage;
 public:
+    static_assert(!std::is_reference<T>::value, "f::NotOptional does not work with reference types");
+
     using value_type = T;
     using value_reference = T&;
     using rvalue_reference = T&&;
 
     explicit constexpr Optional(void) noexcept {};
     explicit constexpr Optional(nullvalue_type) noexcept {};
-    //template <class U>
-    //explicit constexpr Optional(U&& v) : m_storage(std::forward<T>(v)) {}
 
-    explicit constexpr Optional(T&& v) : m_storage(std::forward<T>(v)) {}
+    template <class U>
+    explicit constexpr Optional(U&& v) : m_storage(std::forward<U>(std::move(v))) {}
 
-    constexpr Optional& operator=(T&& v) {
+    template <class U>
+    explicit constexpr Optional(const U& v) : m_storage(std::forward<U>(v)) {}
+
+    constexpr void reset(void) {
+        if (m_storage.has_value) m_storage.~Storage();
+    }
+
+    constexpr bool has_value(void) const noexcept {
+        return m_storage.has_value;
+    }
+
+    constexpr explicit operator bool(void) const noexcept {
+        return has_value();
+    }
+
+    constexpr value_reference get_value(void) & {
+        if (!has_value()) throw bad_access();
+        return m_storage.value;
+    }
+    constexpr rvalue_reference get_value(void) && {
+        if (!has_value()) throw bad_access();
+        return std::move(m_storage.value);
+    }
+
+    constexpr value_reference operator*(void) & noexcept {
+        return m_storage.value;
+    }
+    constexpr rvalue_reference operator*(void) && noexcept {
+        return std::move(m_storage.value);
+    }
+
+    constexpr value_reference operator->(void) noexcept {
+        return m_storage.value;
+    }
+
+    template <class U, std::enable_if<std::is_trivially_copy_assignable_v<U>>>
+    constexpr Optional& operator=(const Optional<U>& rhs) {
         reset();
-        m_storage = std::forward<T>(v);
+        if (rhs.has_value())
+            m_storage = rhs.m_storage;
+        return *this;
+    }
+    template <class U, std::enable_if<std::is_trivially_copy_assignable_v<U>>>
+    constexpr Optional& operator=(Optional<U>&& rhs) {
+        reset();
+        if (rhs.has_value())
+            m_storage = std::move(rhs.m_storage);
         return *this;
     }
 
-    ~Optional(void) = default;
 
-    constexpr void reset(void) const {
-        m_storage.~OptionalStorage();
+    template <class U, std::enable_if<std::is_trivially_copy_constructible_v<U>>>
+    constexpr Optional(const Optional<U>& rhs) {
+        reset();
+        if (rhs.has_value())
+            m_storage = rhs.m_storage;
     }
-
-    constexpr bool has_value(void) const {
-        return m_storage.has_value;
+    template <class U, std::enable_if<std::is_trivially_copy_constructible_v<U>>>
+    constexpr Optional(Optional<U>&& rhs) {
+        reset();
+        if (rhs.has_value())
+            m_storage = std::move(rhs.m_storage);
     }
-    constexpr explicit operator bool(void) const {
-        return has_value();
-    }
-
-    constexpr value_reference get_value(void) {
-        if (!has_value())
-            throw bad_access();
-        return m_storage.value;
-    }
-    constexpr value_reference operator*(void)  { return get_value(); }
-    constexpr value_reference operator->(void) { return get_value(); }
-
-private:
-    OptionalStorage<value_type> m_storage;
 };
 
+template <typename T, typename... Args>
+constexpr auto make_optional(Args&&... args) {
+    static_assert(std::is_same_v<T, nullvalue_type>,
+                  "Creating optionals of type 'nullvalue_type' is ill-formed");
+    return Optional<T>{T{std::forward<Args>(args)...}};
+}
 
-template <typename T, class E = void>
+template <typename T>
 class NotOptional {
+    //BasicStorage<T> storage;
 public:
+    static_assert(!std::is_reference<T>::value, "f::NotOptional does not work with reference types");
+
     using value_type = T;
-    using value_reference = value_type&;
+    using value_reference = T&;
+    using rvalue_reference = T&&;
 
-    constexpr explicit NotOptional(value_type &&v) : m_has_value(true) {
-        new (static_cast<void *>(&m_storage)) value_type(v);
+    union {
+        nullvalue_type null;
+        T m_value;
     };
+    bool m_has_value = false;
 
-    constexpr explicit NotOptional(void) : m_has_value(false) {
-    };
+    explicit constexpr NotOptional(void) noexcept : m_has_value(false) {};
+    explicit constexpr NotOptional(nullvalue_type) noexcept : m_has_value(false) {};
 
-    ~NotOptional(void) {
-        if (m_has_value)
-            get_value().~value_type();
+    template <class U>
+    explicit constexpr NotOptional(U&& v) : m_value(std::forward<U>(v)), m_has_value(true) {}
+
+    template <class U>
+    explicit constexpr NotOptional(const U& v) : m_value(std::forward<U>(v)), m_has_value(true) {}
+
+    //template <class U, std::enable_if<std::is_trivially_copy_assignable<U>::value>>
+    constexpr NotOptional& operator=(const NotOptional &rhs) {
+        reset();
+        if (rhs.has_value())
+            m_value = *rhs;
+        return *this;
+    }
+    constexpr NotOptional& operator=(NotOptional&& rhs) {
+        reset();
+        if (rhs.has_value())
+            m_value = rhs.get_value();
+        return *this;
     }
 
-    constexpr bool has_value(void) const {
+
+
+    constexpr void reset(void) noexcept {
+        if (m_has_value) m_value.T::~T();
+        m_has_value = false;
+    }
+
+    constexpr ~NotOptional(void) {
+        reset();
+    };
+
+    constexpr bool has_value(void) const noexcept {
         return m_has_value;
-    } 
-
-    constexpr value_reference get_value(void) {
-        if (!has_value())
-            throw bad_access();
-        return m_storage.value;
     }
 
-    constexpr explicit operator bool(void) const {
+    constexpr explicit operator bool(void) const noexcept {
         return has_value();
     }
-    constexpr value_reference operator*(void)  { return get_value(); }
-    constexpr value_reference operator->(void) { return get_value(); }
 
-private:
-    union {
-        nullvalue_type nullvalue;
-        value_type value;
-    } m_storage;
-    bool m_has_value;
+    constexpr value_reference get_value(void) & {
+        if (!has_value())
+            throw bad_access();
+        return m_value;
+    }
+    constexpr rvalue_reference get_value(void) && {
+        if (!has_value())
+            throw bad_access();
+        return m_value;
+    }
+
+
+
+    constexpr value_reference operator*(void) noexcept {
+        return m_value;
+    }
+
+    constexpr value_reference operator->(void) noexcept {
+        return m_value;
+    }
 };
 
 /* 'OneOf' models the discriminated union of 'type1' OR 'type2'. 
