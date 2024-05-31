@@ -243,8 +243,13 @@ private:
 
 /* Storage of an templated type.
  *
- * This template is instansiated for non-trivial types and explicitly
- * destructs opbjects.
+ */
+/**
+ * @brief Storage of a single value.
+ * This storage template is instansiated for non-trivial types and enforces
+ * explicit destruction.
+ * Storage can be seen as a vector of size 1.
+ * @see class Storage
  */
 template <class T, class E = void>
 struct Storage {
@@ -262,10 +267,12 @@ struct Storage {
     }
 };
 
-/* Storage of an templated type.
- *
- * This template is instansiated for trivial types and does not handle
- * destructiong
+/**
+ * @brief Storage of a single value.
+ * This storage template is instansiated for trivial types and omits explicit
+ * destruction.
+ * Storage can be seen as a vector of size 1.
+ * @see class Storage
  */
 template <class T>
 struct Storage<T, std::enable_if_t<std::is_trivially_destructible_v<T>>> {
@@ -278,7 +285,7 @@ struct Storage<T, std::enable_if_t<std::is_trivially_destructible_v<T>>> {
     template <class U>
     constexpr Storage(U &&v) noexcept : value(v), has_value(true) {};
     constexpr void reset(void) {
-        if (has_value) value.T::~T();
+        //if (has_value) value.T::~T();
         has_value = false;
     }
 };
@@ -301,7 +308,7 @@ public:
      *
      * Destructor is maybe-trivial due to the chosen overloaded member of Storage.
      *
-     * @see Storage
+     * @see class Storage
      */
     ~Optional(void) noexcept = default;
 
@@ -309,8 +316,6 @@ public:
      * @brief Default Constructor.
      *
      * Default constructor that creates an empty optional.
-     *
-     * @return empty optional
      */
     explicit constexpr Optional(void) noexcept {};
 
@@ -320,8 +325,6 @@ public:
      * Optional Default constructor that creates an empty optional by using
      * explicit nullvalue as input.
      * @see nullvalue_t
-     *
-     * @return empty optional
      */
     explicit constexpr Optional(nullvalue_t) noexcept {};
 
@@ -331,8 +334,6 @@ public:
      * @param u the value to store captured as an rvalue reference
      * Constructor that creates an optional containing the value u.
      * @todo implement some sort of SFINAE template rules
-     *
-     * @return full optional
      */
     //template <class U, std::enable_if<std::is_convertible_v<std::decay_t<U>, T>>>
     //template <class U, std::enable_if<std::is_copy_constructible_v<U>>>
@@ -345,114 +346,232 @@ public:
      * @param u the value to store captured as an lvalue reference
      * Constructor that creates an optional containing the value u.
      * @todo implement some sort of SFINAE template rules
-     *
-     * @return full optional
      */
     //template <class U, std::enable_if<std::is_convertible_v<std::decay_t<U>, T>>>
     //template <class U, std::enable_if<std::is_copy_constructible_v<U>>>
     template <class U>
     constexpr Optional(const U& v) : Optional(std::move(v)) {}
 
+    /**
+     * @brief Engaged Constructor.
+     *
+     * @param opt the value to copy construct from captured as an lvalue reference
+     * Constructor that creates an optional containing the value inside opt.
+     * @todo implement some sort of SFINAE template rules
+     */
     //template <class U, std::enable_if<std::is_copy_constructible_v<U>
     //                                  && std::is_convertible_v<std::decay_t<U>, T>>>
     template <class U>
-    constexpr Optional(const Optional<U>& rhs) {
+    constexpr Optional(const Optional<U>& opt) {
         reset();
-        *this = rhs.get_value();
+        *this = opt.get_value();
     }
 
+    /**
+     * @brief Engaged Constructor.
+     *
+     * @param opt the value to copy construct from captured as an rvalue reference
+     * Constructor that creates an optional containing the value inside opt.
+     * @todo implement some sort of SFINAE template rules
+     */
     //template <class U, std::enable_if<std::is_copy_constructible_v<U>
     //                                  && std::is_convertible_v<std::decay_t<U>, T>>>
     template <class U>
-    constexpr Optional(Optional<U>&& rhs) {
+    constexpr Optional(Optional<U>&& opt) {
         reset();
-        *this = rhs.get_value();
+        *this = opt.get_value();
     }
 
+    /**
+     * @brief Engaged Assignment Operator.
+     *
+     * @param rhs the lvalue to assign from as an lvalue reference
+     * Copying operator that creates an optional containing rhs.
+     * @todo implement some sort of SFINAE template rules
+     * @todo use U templating like above
+     */
     constexpr void operator=(T&& rhs) {
         reset();
         m_storage = Storage(std::move(rhs));
     }
+
+    /**
+     * @brief Engaged Assignment Operator.
+     *
+     * @param rhs the lvalue to assign from as an lvalue reference
+     * Copying operator that creates an optional containing a copy of rhs.
+     * @todo implement some sort of SFINAE template rules
+     * @todo use U templating like above
+     */
     constexpr void operator=(const T& rhs) {
         reset();
         m_storage = Storage(rhs);
     }
 
-
-    template <class U=T>
+    /**
+     * @brief Engaged Assignment Operator.
+     *
+     * @param rhs the optional lvalue to assign from as an lvalue reference
+     * Copying operator that creates an optional containing a copy of the optional rhs.
+     * @todo implement some sort of SFINAE template rules
+     */
+    template <class U>
     constexpr void operator=(const Optional<U>& rhs) {
         reset();
         if (rhs.has_value())
             m_storage = rhs.m_storage;
     }
 
+    /**
+     * @brief Engaged Assignment Operator.
+     *
+     * @param rhs the optional rvalue to capture from as an rvalue reference
+     * Copying operator that creates an optional containing a the optional rhs.
+     * @todo implement some sort of SFINAE template rules
+     */
     //template <class U, std::enable_if<std::is_copy_assignable_v<U>
     //                                  && std::is_convertible_v<std::decay_t<U>, T>>>
-    template <class U=T>
+    template <class U>
     constexpr void operator=(Optional<U>&& rhs) {
         reset();
         if (rhs.has_value())
             m_storage = std::move(rhs.m_storage);
     }
 
+    /**
+     * @brief Disengaged Assignment Operator.
+     *
+     * @param nullvalue
+     * Explicit disengage assignment using nullvalue type.
+     * Results in disengaged optional.
+     * @see nullvalue_t
+     */
+    constexpr void operator=(nullvalue_t) noexcept {
+        reset();
+    }
+
+    /**
+     * @brief Emplacement Construction
+     *
+     * @param args... the variadic parameter pack rvalues
+     * The provided parameter pack is forward expanded and passed
+     * to make_optional to construct T, the created optional is then copy
+     * assigned to this.
+     * 
+     * @todo implement some sort of SFINAE template rules
+     * @see operator=()
+     * @see make_optional()
+     */
     template <typename... Args>
     constexpr void emplace(Args&&... args) {
         reset();
         *this = make_optional<T>(std::forward<Args>(args)...);
     }
 
-    constexpr void operator=(nullvalue_t) noexcept {
-        reset();
-    }
+    /**
+     * @brief Disengage.
+     *
+     * Explicit disengage function.
+     * @see class Storage
+     */
     constexpr void reset(void) {
         m_storage.reset();
     }
 
+    /**
+     * @brief Check if a optional is engaged or disengaged.
+     * @see class Storage
+     */
     constexpr bool has_value(void) const noexcept {
         return m_storage.has_value;
     }
 
+    /**
+     * @brief boolean conversion operator.
+     * Check if a optional is engaged or disengaged through conversion.
+     * @see class Storage
+     */
     constexpr explicit operator bool(void) const noexcept {
         return has_value();
     }
 
+    /**
+     * @brief Accessor.
+     * @throw bad_access if optional is disengaged
+     * @see class bad_access
+     */
     constexpr value_reference get_value(void) & {
         if (!has_value()) throw bad_access();
         return m_storage.value;
     }
+
+    /**
+     * @brief Accessor.
+     * @throw bad_access if optional is disengaged
+     * @see class bad_access
+     */
     constexpr rvalue_reference get_value(void) && {
         if (!has_value()) throw bad_access();
         return std::move(m_storage.value);
     }
+
+    /**
+     * @brief Accessor.
+     * @throw bad_access if optional is disengaged
+     * @see class bad_access
+     */
     constexpr value_reference get_value(void) const& {
         if (!has_value()) throw bad_access();
         return m_storage.value;
     }
+
+    /**
+     * @brief Accessor.
+     * @throw bad_access if optional is disengaged
+     * @see class bad_access
+     */
     constexpr rvalue_reference get_value(void) const&& {
         if (!has_value()) throw bad_access();
         return std::move(m_storage.value);
     }
 
-
+    /**
+     * @brief Accessor.
+     */
     constexpr value_reference operator*(void) & noexcept {
         return m_storage.value;
     }
+
+    /**
+     * @brief Accessor.
+     */
     constexpr rvalue_reference operator*(void) && noexcept {
         return std::move(m_storage.value);
     }
+
+    /**
+     * @brief Accessor.
+     */
     constexpr value_reference operator*(void) const& noexcept {
         return m_storage.value;
     }
+
+    /**
+     * @brief Accessor.
+     */
     constexpr rvalue_reference operator*(void) const&& noexcept {
         return std::move(m_storage.value);
     }
 
+    /**
+     * @brief Accessor.
+     */
     constexpr value_reference operator->(void) noexcept {
         return m_storage.value;
     }
 
 private:
-    Storage<T> m_storage;
+    Storage<T> m_storage; ///< maybe-trivial destructor invocated storage
 };
 
 template <typename T, typename... Args>
