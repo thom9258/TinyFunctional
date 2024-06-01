@@ -1,5 +1,5 @@
 #include <iostream>
-#include "../../TinyFunctional.hpp"
+#include "../../TinyFunctionalTypes.hpp"
 
 #include "../libtester-2.0.h"
 
@@ -21,9 +21,24 @@ struct Person {
         return *this;
     }
     bool operator==(const Person& rhs) {
-        return name == rhs.name and age == rhs.age;
+        return name == rhs.name && age == rhs.age;
     }
 };
+
+void test_bad_access() {
+    f::Optional<int> myint;
+    TEST(!myint);
+    int raw = -1;
+    bool threw = false;
+    try {
+        raw = myint.get_value();
+    }
+    catch (const f::BadAccess& ba) {
+        threw = true;
+    }
+    TEST(threw);
+    TEST(raw = -1);
+}
 
 void test_accessors() {
     f::Optional<int> myint;
@@ -126,6 +141,15 @@ void test_construction_other_optional() {
     test_group_construction_other_optional<Person>(Person("Alex", 24));
 }
 
+void test_make_optional() {
+    f::Optional<Person> p{f::nullvalue};
+    f::Optional<Person> p1{Person("bob", 22)};
+    TEST(p1);
+    f::Optional<Person> p2 = f::make_optional<Person>("bob", 22);
+    TEST(p2);
+    TEST(*p1 == *p2);
+}
+
 void test_implicit_conversion_construction() {
     {
         f::Optional<std::string> p = "max";
@@ -139,17 +163,6 @@ void test_implicit_conversion_construction() {
     }
 }
 
-void test_construction_non_trivial() {
-    f::Optional<Person> p;
-    TEST(!p);
-    
-    //p = f::make_optional<Person>("ash", 16);
-    //TEST(p);
-    //
-    //p = f::Optional<Person>{f::nullvalue};
-    //TEST(!p);
-}
-
 void test_resetable() {
     f::Optional<int> myint(2);
     TEST(myint);
@@ -157,58 +170,12 @@ void test_resetable() {
 
     myint.reset();
     TEST(!myint);
-}
+    myint = 4;
 
-void test_assignment() {
-//   f::Optional<int> myint = 2;
-//   TEST(myint);
-//   TEST(*myint == 2);
-//
-//   f::Optional<int> notmyint = f::nullvalue;
-//   TEST(!notmyint);
-}
-
-/*
-struct Data {
-    int mi;
-    std::string tostr(void) { return "("+ std::to_string(mi) +")";}
-
-    Data() noexcept : mi(-1) { puts("default ctor"); puts(tostr().c_str()); }
-    Data(int i) noexcept : mi(i) { puts("non-trivial ctor"); puts(tostr().c_str()); }
-    Data(const Data&) noexcept { puts("copy ctor"); puts(tostr().c_str()); }
-    Data(Data&&) noexcept { puts("move ctor"); puts(tostr().c_str()); }
-    Data& operator=(Data&&) noexcept { puts("move assign"); puts(tostr().c_str()); return *this; }
-    Data& operator=(const Data&) noexcept { puts("copy assign"); puts(tostr().c_str()); return *this; }
-    bool operator==(Data&& rhs) noexcept {  return mi == rhs.mi; }
-    ~Data() { puts("dtor"); puts(tostr().c_str()); }
-};
-
-void test_accessors_loud() {
-    f::Optional<Data> my;
-    TEST(!my);
-    
-    my = f::Optional<Data>{Data(1)};
-    TEST(my);
-    TEST(my.has_value());
-    TEST(*my == 2);
-    TEST(my.get_value() == 2);
-    
-    my = f::Optional<Data>{f::nullvalue};
-    TEST(!my);
-}
-*/
-
-void test_destruct_call2() {
-//   Data a{};
-//   {
-//       auto a = f::Optional<Data>(Data());
-//       TEST(a);
-//   }
-//   {
-//       auto b = std::optional<Data>(Data());
-//       TEST(b);
-//   }
-//
+    TEST(myint);
+    TEST(*myint == 4);
+    myint = f::nullvalue;
+    TEST(!myint);
 }
 
 class Loud {
@@ -224,30 +191,82 @@ private:
     bool& mdf;
 };
 
-
-
-void test_make_optional() {
-    //f::Optional<Person> p{f::nullvalue};
-    //f::Optional<Person> p;
-    //f::Optional<Person> p1{Person("bob", 22)};
-    //TEST(p1);
-    //f::Optional<Person> p2 = f::make_optional<Person>("bob", 22);
-    //TEST(p2);
+void test_loud_destruct() {
+    bool destructed = false;
+    {
+        auto directloud = Loud(destructed);
+        TEST(destructed == false);
+    }
+    TEST(destructed == true);
+    {
+        auto optloud = f::make_optional<Loud>(destructed);
+        TEST(destructed == false);
+    }
+    TEST(destructed == true);
 }
+
+void test_and_then() {
+    const auto mult2 = [](auto n) {return f::Optional<int>(n*2);};
+    const auto add4 = [](auto n) {return f::Optional<int>(n*2);};
+    int num = f::Optional<float>(2.4).and_then(mult2).and_then(add4).get_value();
+    TEST(num == 2*2+4);
+}
+
+void test_or_else() {
+    f::Optional<int> num = f::nullvalue;
+    TEST(!num);
+    num = num.or_else([]() { return f::Optional<int>(42); });
+
+    TEST(num);
+    TEST(*num = 42);
+}
+
+void test_get_value_or() {
+    f::Optional<int> num = f::nullvalue;
+    int d = num.get_value_or(3);
+    TEST(d == 3);
+}
+
+
+f::Optional<int> opt_stoi(const std::string& str) {
+    int out{0};
+    try { out = std::stoi(str); }
+    catch (...) { return f::nullvalue; }
+    return {out};
+}
+
+void example_usage1() {
+    const auto mult2 = [](auto n) {return f::Optional<int>(n*2);};
+
+    f::Optional<int> num;
+    num = opt_stoi("NaN");
+    TEST(!num.has_value());
+
+    num = opt_stoi("3").and_then(mult2).get_value_or(-1);
+    TEST(num.has_value());
+    TEST(num.get_value() == 6);
+
+    num = opt_stoi("NaN").and_then(mult2).get_value_or(-1);
+    TEST(num.has_value());
+    TEST(num.get_value() == -1);
+}
+
 
 
 int main(int argc, char** argv) {
     ltcontext_begin(argc, argv);
 
-	//TEST_UNIT(test_construction_non_trivial());
 	TEST_UNIT(test_construction());
 	TEST_UNIT(test_construction_other_optional());
 	TEST_UNIT(test_implicit_conversion_construction());
-	//TEST_UNIT(test_accessors_loud());
 	TEST_UNIT(test_resetable());
-	TEST_UNIT(test_assignment());
-	TEST_UNIT(test_destruct_call2());
 	TEST_UNIT(test_make_optional());
+	TEST_UNIT(test_bad_access());
+	TEST_UNIT(test_loud_destruct());
+	TEST_UNIT(test_and_then());
+	TEST_UNIT(test_or_else());
+	TEST_UNIT(test_get_value_or());
+	TEST_UNIT(example_usage1());
 
     return ltcontext_end();
 }
