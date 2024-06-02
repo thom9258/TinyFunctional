@@ -40,18 +40,49 @@ void test_bad_access() {
     TEST(raw = -1);
 }
 
+
+template<typename T>
+void test_group_accessors(T value) {
+    {
+        f::Optional<T> my;
+        TEST(!my);
+        my = f::Optional<T>(value);
+        TEST(my);
+        TEST(my.has_value());
+        TEST(*my == value);
+        TEST(my.get_value() == value);
+        my = f::Optional<T>{f::nullvalue};
+        TEST(!my);
+    }
+    {
+        f::Optional<T> my;
+        my = f::Optional<T>(value);
+        TEST(my);
+        T extracted = *std::move(my);
+        TEST(extracted == value);
+        // Here we check if optional is still engaged, it should be but
+        // should contain leftover undefined garbage after move semantics. 
+        TEST(my);
+    }
+    {
+        f::Optional<T> my;
+        my = f::Optional<T>(value);
+        TEST(my);
+        T extracted = std::move(*my);
+        TEST(extracted == value);
+        // Here we check if optional is still engaged, it should be but
+        // should contain leftover undefined garbage after move semantics. 
+        TEST(my);
+    }
+
+}
+
 void test_accessors() {
-    f::Optional<int> myint;
-    TEST(!myint);
-    
-    myint = f::Optional<int>(2);
-    TEST(myint);
-    TEST(myint.has_value());
-    TEST(*myint == 2);
-    TEST(myint.get_value() == 2);
-    
-    myint = f::Optional<int>{f::nullvalue};
-    TEST(!myint);
+    test_group_accessors<int>(24);
+
+    // these are not possible it seems
+    //test_group_accessors<std::string>("Alex");
+    //test_group_accessors<Person>(Person("Alex", 24));
 }
 
 
@@ -150,6 +181,47 @@ void test_make_optional() {
     TEST(*p1 == *p2);
 }
 
+
+
+template<typename T>
+void test_group_resetable(T value) {
+    std::cout << "Value type: " << typeid(T).name() << std::endl;
+    {
+        f::Optional<T> p = f::Optional<T>(value);
+        TEST(p);
+        TEST(*p == value);
+        p.reset();
+        TEST(!p);
+        bool threw = false;
+        try {
+          p.get_value();
+        } catch (...) {
+            threw = true;
+        }
+        TEST(threw);
+    }
+    {
+        f::Optional<T> p = f::Optional<T>(value);
+        TEST(p);
+        TEST(*p == value);
+        p = f::nullvalue;
+        TEST(!p);
+        bool threw = false;
+        try {
+          p.get_value();
+        } catch (...) {
+            threw = true;
+        }
+        TEST(threw);
+    }
+}
+
+void test_resetable() {
+    test_group_resetable<int>(4);
+    test_group_resetable<std::string>("Alex");
+    test_group_resetable<Person>(Person("Alex", 24));
+}
+
 void test_implicit_conversion_construction() {
     {
         f::Optional<std::string> p = "max";
@@ -161,21 +233,6 @@ void test_implicit_conversion_construction() {
         TEST(p);
         TEST(*p == "alex");
     }
-}
-
-void test_resetable() {
-    f::Optional<int> myint(2);
-    TEST(myint);
-    TEST(*myint == 2);
-
-    myint.reset();
-    TEST(!myint);
-    myint = 4;
-
-    TEST(myint);
-    TEST(*myint == 4);
-    myint = f::nullvalue;
-    TEST(!myint);
 }
 
 class Loud {

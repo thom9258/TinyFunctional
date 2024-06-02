@@ -46,18 +46,22 @@ constexpr nullvalue_t nullvalue{0};
  */
 template <class T, class E = void>
 struct Storage {
-    ~Storage(void) { reset(); }
-    union { nullvalue_t null; T value; };
-    bool has_value = false;
-    constexpr Storage(void) noexcept {};
-    template <class U>
-    constexpr Storage(const U& v) noexcept : value(v), has_value(true) {};
-    template <class U>
-    constexpr Storage(U &&v) noexcept : value(v), has_value(true) {};
-    constexpr void reset(void) {
-        if (has_value) value.T::~T();
-        has_value = false;
+    union { nullvalue_t null; T value; }; ///< Internal storage space
+    bool engaged = false;                 ///< Engaged signature
+
+    /**@brief Non-Trivial Destructor*/
+    ~Storage(void) {
+        if (engaged) value.T::~T();
+        engaged = false;
     }
+    /**@brief Disengaged Constructor*/
+    constexpr Storage(void) noexcept {};
+    /**@brief Engaged Constructor*/
+    template <class U>
+    constexpr Storage(const U& v) noexcept : value(v), engaged(true) {};
+    /**@brief Engaged Constructor*/
+    template <class U>
+    constexpr Storage(U &&v) noexcept : value(v), engaged(true) {};
 };
 
 /**
@@ -69,18 +73,19 @@ struct Storage {
  */
 template <class T>
 struct Storage<T, std::enable_if_t<std::is_trivially_destructible_v<T>>> {
-    ~Storage(void) = default;
-    union { nullvalue_t null; T value; };
-    bool has_value = false;
+    union { nullvalue_t null; T value; }; ///< Internal storage space
+    bool engaged = false;                 ///< Engaged signature
+
+    /**@brief Trivial Destructor*/
+    ~Storage(void) {engaged = false;};
+    /**@brief Disengaged Constructor*/
     constexpr Storage(void) noexcept {};
+    /**@brief Engaged Constructor*/
     template <class U>
-    constexpr Storage(const U& v) noexcept : value(v), has_value(true) {};
+    constexpr Storage(const U& v) noexcept : value(v), engaged(true) {};
+    /**@brief Engaged Constructor*/
     template <class U>
-    constexpr Storage(U &&v) noexcept : value(v), has_value(true) {};
-    constexpr void reset(void) {
-        //if (has_value) value.T::~T();
-        has_value = false;
-    }
+    constexpr Storage(U &&v) noexcept : value(v), engaged(true) {};
 };
 
 
@@ -187,7 +192,7 @@ public:
     constexpr void operator=(T&& rhs) {
         reset();
         m_storage.value = rhs;
-        m_storage.has_value = true;
+        m_storage.engaged = true;
     }
 
     /**
@@ -202,7 +207,7 @@ public:
     constexpr void operator=(const T& rhs) {
         reset();
         m_storage.value = rhs;
-        m_storage.has_value = true;
+        m_storage.engaged = true;
     }
 
     /**
@@ -216,7 +221,7 @@ public:
     constexpr void operator=(const Optional<U>& rhs) {
         reset();
         if (rhs.has_value())
-            m_storage = rhs.m_storage;
+            m_storage = std::move(rhs.get_value());
     }
 
     /**
@@ -232,7 +237,7 @@ public:
     constexpr void operator=(Optional<U>&& rhs) {
         reset();
         if (rhs.has_value())
-            m_storage = std::move(rhs.m_storage);
+            m_storage = std::move(rhs.get_value());
     }
 
     /**
@@ -248,31 +253,13 @@ public:
     }
 
     /**
-     * @brief Emplacement Construction
-     *
-     * @param args... the variadic parameter pack rvalues
-     * The provided parameter pack is forward expanded and passed
-     * to make_optional to construct T, the created optional is then copy
-     * assigned to this.
-     * 
-     * @todo implement some sort of SFINAE template rules
-     * @see operator=()
-     * @see make_optional()
-     */
-    template <typename... Args>
-    constexpr void emplace(Args&&... args) {
-        reset();
-        *this = make_optional<T>(std::forward<Args>(args)...);
-    }
-
-    /**
      * @brief Disengage.
      *
      * Explicit disengage function.
      * @see class Storage
      */
     constexpr void reset(void) {
-        m_storage.reset();
+        m_storage.~Storage();
     }
 
     /**
@@ -280,7 +267,7 @@ public:
      * @see class Storage
      */
     constexpr bool has_value(void) const noexcept {
-        return m_storage.has_value;
+        return m_storage.engaged;
     }
 
     /**
@@ -304,6 +291,7 @@ public:
 
     /**
      * @brief  Maybe-throwing accessor.
+     * Leaves optional value in undefined post-move state and does not reset()
      * @throw BadAccess if optional is disengaged
      * @see class BadAccess
      */
@@ -324,6 +312,7 @@ public:
 
     /**
      * @brief  Maybe-throwing accessor.
+     * Leaves optional value in undefined post-move state and does not reset()
      * @throw BadAccess if optional is disengaged
      * @see class BadAccess
      */
@@ -341,6 +330,7 @@ public:
 
     /**
      * @brief  Non-throwing accessor.
+     * Leaves optional value in undefined post-move state and does not reset()
      */
     constexpr rvalue_reference operator*(void) && noexcept {
         return std::move(m_storage.value);
@@ -355,6 +345,7 @@ public:
 
     /**
      * @brief  Non-throwing accessor.
+     * Leaves optional value in undefined post-move state and does not reset()
      */
     constexpr rvalue_reference operator*(void) const&& noexcept {
         return std::move(m_storage.value);
